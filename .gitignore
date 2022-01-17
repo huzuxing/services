@@ -1,0 +1,9 @@
+.idea/
+*.iml
+target/
+**/*.iml
+**/target/
+mall_core/
+mall_gateway/
+mall_server/
+mall_service
