@@ -124,7 +124,15 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
                 var f = refreshScheduler.scheduleAtFixedRate(() -> {
                     refreshExpireTime(lockKey, lockValue, timeoutMillis, redisManager);
                 }, period, period, TimeUnit.MILLISECONDS);
-                holder.put(lockKey, new Holder(lockValue, Arrays.asList(f)));
+                holder.computeIfAbsent(lockKey, k -> {
+                    List<ScheduledFuture<?>> futures = new ArrayList<>(lockCount);
+                    futures.add(f);
+                    return new Holder(lockValue, futures);
+                });
+                holder.computeIfPresent(lockKey, (lk, hd) -> {
+                    hd.futures.add(f);
+                    return hd;
+                });
             } catch (Exception e) {
                 releaseRedis(lockKey, lockValue);
                 throw e;
