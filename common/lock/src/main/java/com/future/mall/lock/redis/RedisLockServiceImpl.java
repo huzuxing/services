@@ -13,8 +13,6 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
-import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 /**
@@ -77,7 +75,8 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
             RedisManager redisManager = null;
             try {
                 redisManager = new RedisManager(uri, args.getPoolSize(), args.getRetryTimes(), Duration.ofMillis(this.timeoutMillis));
-            } catch (Exception e) {
+            }
+            catch (Exception e) {
                 if (errorConnectCount > (redisManagers.size() - lockCount)) {
                     log.error("available redis count not satisfy your strategy for lock: lock type is : {}", args.getType());
                     throw new IllegalArgumentException("available redis count not satisfy your strategy for lock");
