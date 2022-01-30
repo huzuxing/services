@@ -21,7 +21,7 @@ public class LockTest {
     public void lockTest() throws InterruptedException {
         var lock = redisLockService.lock("testKey");
         Assert.assertTrue(lock);
-        Thread.sleep(2000);
+        Thread.sleep(10000);
         var res = redisLockService.release("testKey");
         Assert.assertTrue(res);
     }

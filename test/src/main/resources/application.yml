@@ -12,11 +12,12 @@ spring:
 redis:
   lock:
     enable: true
-    type: single # single，cluster, sentinel，目前支持单机，集群，哨兵模式
+    type: cluster # single，cluster, sentinel，目前支持单机，集群，哨兵模式
     hosts:
       - 127.0.0.1:6379/0
+      - 127.0.0.1:6479/0
     password:
     poolSize: 1
     retryTimes: 3
     retryDelay: 2000
-    timeoutMillis: 100000
+    timeoutMillis: 200000

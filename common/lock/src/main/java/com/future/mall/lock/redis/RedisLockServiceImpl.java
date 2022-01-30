@@ -13,6 +13,8 @@ import reactor.core.publisher.Flux;
 import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Function;
 
 /**
@@ -28,13 +30,13 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
     private final List<RedisManager> redisManagers;
     private final long timeoutMillis;
     private final SetArgs setArgs;
-    private final List<RedisManager> lockSuccessRedisManagers;
-
 
     private final Map<String, Holder> holder = new ConcurrentHashMap<>();
 
     private final int lockCount;
     private final String lockType;
+
+    private final Map<String, Set<RedisManager>> lockSuccessRedisManagers = new ConcurrentHashMap<>();
 
     private final Map<String, Function<String, Boolean>> lockHandlers = Map.of(
             "single", this::singleLock,
@@ -85,7 +87,6 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
             }
             redisManagers.add(redisManager);
         }
-        lockSuccessRedisManagers = new ArrayList<>(lockCount);
         if (!lockHandlers.containsKey(args.getType())) {
             throw new IllegalArgumentException("no handler for type : " + args.getType());
         }
@@ -133,11 +134,19 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
                     hd.futures.add(f);
                     return hd;
                 });
+                lockSuccessRedisManagers.computeIfAbsent(lockKey, k -> {
+                   Set<RedisManager> successManager = new HashSet<>(1);
+                   successManager.add(redisManager);
+                   return successManager;
+                });
+                lockSuccessRedisManagers.computeIfPresent(lockKey, (lk, sm) -> {
+                   sm.add(redisManager);
+                   return sm;
+                });
             } catch (Exception e) {
                 releaseRedis(lockKey, lockValue);
                 throw e;
             }
-            lockSuccessRedisManagers.add(redisManager);
         }
         return success;
     }
@@ -152,28 +161,33 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
      * @return
      */
     private boolean clusterLock(String lockKey) {
-        Flux.fromIterable(redisManagers.subList(0, lockCount - 1)).map(rm -> {
+        int successLockCount = 0;
+        var asyncLocks = Flux.fromIterable(redisManagers.subList(0, lockCount)).map(rm -> {
             var f = CompletableFuture.supplyAsync(() -> {
                 var success = lockWithRedisManager(lockKey, rm);
                 return success ? rm : null;
             });
             return f;
-        }).subscribe(f -> f.whenComplete((v, e) -> Optional.ofNullable(v).ifPresent(rm -> lockSuccessRedisManagers.add(rm))));
-        int redisManageCount = redisManagers.size();
-        int nextIndex = lockCount - 1;
-        int successCount = lockSuccessRedisManagers.size();
-        while (successCount < lockCount) {
-            if (nextIndex > (redisManageCount - 1)) {
-                break;
-            }
-            var rm = redisManagers.get(++nextIndex);
-            var success = lockWithRedisManager(lockKey, rm);
-            if (success) {
-                lockSuccessRedisManagers.add(rm);
-                successCount++;
+        }).collectList().block();
+        for (var c : asyncLocks) {
+            var rm = c.join();
+            if (null != rm) {
+                successLockCount++;
             }
         }
-        return successCount == lockCount;
+        int redisManageCount = redisManagers.size();
+        int nextIndex = lockCount;
+        while (successLockCount < lockCount) {
+            if ((nextIndex > (redisManageCount - 1)) || successLockCount == lockCount) {
+                break;
+            }
+            var rm = redisManagers.get(nextIndex++);
+            var success = lockWithRedisManager(lockKey, rm);
+            if (success) {
+                successLockCount++;
+            }
+        }
+        return successLockCount == lockCount;
     }
 
     /**
@@ -222,15 +236,17 @@ public class RedisLockServiceImpl extends AbstractLockService implements LockSer
 
     private boolean releaseRedis(String lockKey, String lockValue) {
         int successCount = 0;
-        for (RedisManager lockSuccessRedisManager : lockSuccessRedisManagers) {
+        var sm = lockSuccessRedisManagers.remove(lockKey);
+        if (null == sm) {
+            return false;
+        }
+        for (var lockSuccessRedisManager : sm) {
             boolean success = lockSuccessRedisManager.sync().eval(releaseScript, ScriptOutputType.BOOLEAN, new String[]{lockKey}, lockValue);
             if (success) {
                 successCount++;
             }
         }
-        boolean success = successCount == lockSuccessRedisManagers.size();
-        lockSuccessRedisManagers.clear();
-        return success;
+        return successCount == sm.size();
     }
 
     static class Holder {
